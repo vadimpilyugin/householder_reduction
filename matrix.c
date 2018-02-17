@@ -536,3 +536,67 @@ double matrix_abs_diff (Matrix A, Matrix B) {
   MPI_Bcast (&total_diff, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
 	return total_diff;
 }
+
+Vector vector_new (int size) {
+	Vector V;
+	V.data = (double *) malloc (size*sizeof(double));
+	if (V.data == NULL) {
+		perror ("vector_new");
+		fprintf (stderr, "Значение size: %d\n", size);
+		exit (ERROR);
+	}
+	V.size = size;
+	return V;
+}
+
+void vector_free (Vector V) {
+	if (V.data != NULL)
+		free (V.data);
+}
+
+void vector_fill (Vector V, double (*func)(int)) {
+	int row;
+
+	for (row = 0; row < V.size; row++) {
+		V.data[row] = func (row);
+	}
+}
+
+Vector vector_new_and_fill (int size, double (*func)(int)) {
+	Vector V = vector_new (size);
+	vector_fill (V, func);
+	return V;
+}
+
+void vector_print (Vector V) {
+	if (i_am_the_master) {
+		int row;
+
+		printf("\n\n");
+		for (row = 0; row < V.size; row++) {
+			printf ("%8.4lf\n", V.data[row]);
+		}
+		printf("\n\n");
+	}
+}
+
+double vector_abs_diff (Vector U, Vector V) {
+	if (U.size != V.size) {
+		errno = EINVAL;
+		perror ("vector_abs_diff: размеры не совпадают!");
+		exit (ERROR);
+	}
+
+	int size = V.size;
+	int row;
+	double diff = 0;
+
+	for (row = 0; row < size; row++) {
+		int index = row;
+		double tmp = fabs (U.data[index]-V.data[index]);
+		if (tmp > diff)
+			diff = tmp;
+	}
+
+	return diff;
+}

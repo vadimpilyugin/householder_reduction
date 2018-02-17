@@ -26,6 +26,9 @@ void print_test (const char *test) {
 	}
 }
 
+double vector_filler_natural (int row) {
+	return row+1;
+}
 double matrix_filler_hermitian (int row, int col) {
 	double a [MEDIUM][MEDIUM] = {
 		{1,5,9,5,8},
@@ -187,6 +190,18 @@ void test_abs_difference () {
 	print_test (OK);
 }
 
+void test_create_and_fill_vector () {
+	print_test ("test_create_and_fill_vector");
+	// ======= test code ==========
+
+	Vector V = vector_new_and_fill (MEDIUM, vector_filler_natural);
+	vector_print (V);
+	vector_free (V);
+	
+	// ======= test code ==========
+	print_test (OK);
+}
+
 int main(int argc, char **argv) {
 	MPI_Init(&argc, &argv);
 	int rank;
@@ -201,6 +216,7 @@ int main(int argc, char **argv) {
 	test_abs_difference ();
 	test_matrix_print ();
 	test_matrix_transform ();
+	test_create_and_fill_vector ();
 
 	// =================== Tests ======================
 	matrix_exit();

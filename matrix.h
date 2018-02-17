@@ -22,6 +22,17 @@ typedef struct GridProcess {
 	int myrank;
 } GridProcess;
 
+typedef struct {
+	double *data;
+	int size;
+} Vector;
+
+Vector vector_new (int size);
+void vector_free (Vector);
+Vector vector_new_and_fill (int size, double (*func)(int));
+void vector_print (Vector);
+double vector_abs_diff (Vector U, Vector V);
+
 
 void matrix_init (const int block_size); // call before all others
 void matrix_exit (); // call after all others
