@@ -5,7 +5,8 @@
 
 int main (int argc, char * argv[]) {
   MPI_Init (&argc, &argv);
-  placeholder ();
+  matrix_init (1);
+  matrix_exit ();
   MPI_Finalize ();
   return 0;
 }
