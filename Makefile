@@ -1,33 +1,37 @@
 CC = mpicc
-EXECUTABLES = main tests
+EXECUTABLES = build/main build/tests
+FLAGS = -Wall -O3
 
-all: $(EXECUTABLES)
+all: mkdir $(EXECUTABLES)
+
+mkdir: 
+	mkdir -p build
 
 # Object files
-main.o: main.c
-	$(CC) -c -o main.o main.c
+build/main.o: main.c
+	$(CC) $(FLAGS) -c -o build/main.o main.c
 
-matrix.o: matrix.c
-	$(CC) -c -o matrix.o matrix.c
+build/matrix.o: matrix.c
+	$(CC) $(FLAGS) -c -o build/matrix.o matrix.c
 
-tests.o: tests.c
-	$(CC) -c -o tests.o tests.c
+build/tests.o: tests.c
+	$(CC) $(FLAGS) -c -o build/tests.o tests.c
 
 # Executables
-main: main.o matrix.o
-	$(CC) -o $@ main.o matrix.o -lm
+build/main: build/main.o build/matrix.o
+	$(CC) $(FLAGS) -o $@ build/main.o build/matrix.o -lm
 
-tests: tests.o matrix.o
-	$(CC) -o $@ tests.o matrix.o -lm
+build/tests: build/tests.o build/matrix.o
+	$(CC) $(FLAGS) -o $@ build/tests.o build/matrix.o -lm
 
 # Phony targets
-run: main
+run: build/main
 	# =================
-	mpiexec -n 7 ./main
+	mpiexec -n 7 -oversubscribe ./build/main 1000
 
-test: tests
+test: build/tests
 	# =================
-	mpiexec -n 7 ./tests
+	mpiexec -n 7 -oversubscribe ./build/tests
 
 clean:
-	rm -f *.o $(EXECUTABLES)
+	rm -rf *.o build $(EXECUTABLES)

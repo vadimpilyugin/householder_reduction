@@ -7,19 +7,10 @@
 #include <string.h>
 // errno
 #include <errno.h>
-// lseek, read
-#include <sys/types.h>
-#include <unistd.h>
-// open
-#include <sys/stat.h>
-#include <fcntl.h>
 // sqrt
 #include <math.h>
 // exit
 #include <stdlib.h>
-// int usleep(useconds_t usec);
-#include <unistd.h>
-
 
 // Libs
 #include "mpi.h"
@@ -128,40 +119,16 @@ void print_g_str (int sender, int receiver) {
 	}
 }
 
-static void guess_process_grid_dimensions (int *n_proc_rows_, int *n_proc_cols_) {
-	int nproc;
-	int myrank; // не используется
-	int n_proc_rows;
-
-	// Cblacs_pinfo(&myrank, &nproc);
-	MPI_Comm_size (MPI_COMM_WORLD, &nproc);
-	//for (n_proc_rows = (int) sqrt(nproc); (nproc % n_proc_rows != 0); n_proc_rows--);
-	*n_proc_rows_ = 1;//n_proc_rows;
-	*n_proc_cols_ = nproc;//nproc / n_proc_rows;
-}
-
 static GridProcess new_grid (int n_proc_rows, int n_proc_cols, int myrank, int nproc) {
-	int context;
-
-	// Cblacs_get(NO_PARAM, GET_DEFAULT_CONTEXT, &context);
-	// Cblacs_gridinit(&context, (char *) "Row-major", n_proc_rows, n_proc_cols);
 
 	GridProcess grid_proc;
-	// grid_proc.context = context;
-	// Cblacs_gridinfo(
-	// 	context, 
-	// 	&(grid_proc.n_proc_rows),
-	// 	&(grid_proc.n_proc_cols),
-	// 	&(grid_proc.myrow),
-	// 	&(grid_proc.mycol)
-	// );
 	grid_proc.n_proc_rows = n_proc_rows;
 	grid_proc.n_proc_cols = n_proc_cols;
 	grid_proc.myrow = 0;
 	grid_proc.mycol = myrank;
 
-	grid_proc.nproc = nproc; //grid_proc.n_proc_rows*grid_proc.n_proc_cols;
-	grid_proc.myrank = myrank; // grid_proc.myrow*grid_proc.n_proc_cols+grid_proc.mycol;
+	grid_proc.nproc = nproc;
+	grid_proc.myrank = myrank;
 	return grid_proc;
 }
 
@@ -177,6 +144,7 @@ void matrix_init () {
 	int n_proc_cols = nproc;
 	// guess_process_grid_dimensions (&n_proc_rows, &n_proc_cols);
 	g_grid_proc = new_grid (n_proc_rows, n_proc_cols, myrank, nproc);
+	#if DEBUG
 	if (i_am_the_master) {
 
 		printf ("\n\tПроцессорная решетка\n\n");
@@ -202,16 +170,15 @@ void matrix_init () {
 	}
 	if (i_am_the_master)
 		printf ("\n\n");
+	#endif
 }
 
 void matrix_exit () {
-	// Cblacs_gridexit (g_grid_proc.context);
-	// Cblacs_exit (1);
+
 }
 
 Matrix matrix_new(const int dim_) {
 	Matrix A;
-	int master = MASTER;
 	int dim = dim_;
 
 	A.n_rows = dim;
@@ -592,7 +559,6 @@ double vector_abs_diff (Vector U, Vector V) {
 
 int calculate_x (int n, int k, Vector X, Matrix A) {
 	int row;
-	int col;
 	int column_start = INDEX(0,k,n);
 	// считаем вектор x матрицы отражения
 	// x = (a - ||a||*e) / ||a - ||a||*e||
@@ -729,6 +695,7 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 	X = vector_new (n); // вектор решения
 	if (i_am_the_master) {
 		A_k = vector_new (n); // дополнительный для хранения столбцов матрицы
+		memset (A_k.data, 0, n*sizeof(double));
 	}
 
 	for (k = n-1; k >= 0; k--) {
@@ -800,7 +767,6 @@ Vector matrix_vector_mult (Matrix A, Vector X) {
 	int row;
 	int col;
 	int k;
-	int i;
 	Vector V;
 
 	if (i_am_the_master) {
@@ -824,7 +790,7 @@ Vector matrix_vector_mult (Matrix A, Vector X) {
 		if (indxg2pc (k) == g_grid_proc.mycol) {
 			// каждый процесс умножает свою колонку в матрице на число X[k]
 			int row;
-			for (int row = 0; row < n; row++) {
+			for (row = 0; row < n; row++) {
 				A.data[INDEX(row,k,n)] *= X.data[k];
 			}
 		}
