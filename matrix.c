@@ -485,43 +485,6 @@ void matrix_print (Matrix A) {
 	MPI_Barrier (MPI_COMM_WORLD);
 }
 
-// void matrix_print_diag (Matrix A) {
-// 	int global_row;
-// 	int global_col;
-
-// 	for (global_row = 0; global_row < A.n_rows; global_row++) {
-// 		MPI_Barrier (MPI_COMM_WORLD);
-
-
-// 		global_col = global_row;
-// 		int process_row = (global_row/g_block_size)%g_grid_proc.n_proc_rows;
-// 		int process_col = (global_col/g_block_size)%g_grid_proc.n_proc_cols;
-		
-// 		if (process_row == g_grid_proc.myrow && process_col == g_grid_proc.mycol) {
-// 			{
-// 				int local_row = indxg2lr (global_row);
-// 				int local_col = indxg2lc (global_col);
-// 				double local_elem = A.data[local_col*A.local_rows+local_row];
-// 				snprintf (g_str, STR_LEN, "%8.4f", cabs (local_elem));
-// 			}
-// 			MPI_Request request;
-// 			MPI_Isend (g_str,STR_LEN,MPI_CHAR,MASTER,0,MPI_COMM_WORLD, &request);
-// 		}
-// 		if (i_am_the_master) {
-// 			int source = process_row*g_grid_proc.n_proc_cols+process_col;
-// 			MPI_Status status;
-
-// 			MPI_Recv (g_str,STR_LEN,MPI_CHAR,source,0,MPI_COMM_WORLD,&status);
-// 			printf ("%s",g_str);
-// 			fflush (stdout);
-// 			if (global_col == A.n_cols-1)
-// 				printf ("\n\n");
-// 		}
-
-// 		MPI_Barrier (MPI_COMM_WORLD);
-// 	}
-// }
-
 double matrix_abs_diff (Matrix A, Matrix B) {
 	if (A.n_rows != B.n_rows || A.n_cols != B.n_cols) {
 		errno = EINVAL;
@@ -630,28 +593,28 @@ double vector_abs_diff (Vector U, Vector V) {
 int calculate_x (int n, int k, Vector X, Matrix A) {
 	int row;
 	int col;
-
+	int column_start = INDEX(0,k,n);
 	// считаем вектор x матрицы отражения
 	// x = (a - ||a||*e) / ||a - ||a||*e||
 
 	// S_k = sum for i = k+1..n (A[i,k]^2)
 	double s_k = 0;
 	for (row = k+1; row < n; row++)
-		s_k += sqr (A.data[INDEX(row,k,n)]);
+		s_k += sqr (A.data[column_start+row]);
 
 	// ||a|| = sqrt (S_k + A[k,k]^2)
-	double norm_a = sqrt (s_k + sqr(A.data[INDEX(k,k,n)]));
+	double norm_a = sqrt (s_k + sqr(A.data[column_start+k]));
 	if (norm_a < EPS) {
 		// матрица приведена к треугольному виду
 		return ALREADY_TRIAGONAL;
 	}
 
 	// X[k] = A[k,k]-norm(A[k])
-	X.data[k] = A.data[INDEX(k,k,n)] - norm_a;
+	X.data[k] = A.data[column_start+k] - norm_a;
 
 	// X[k+1..n] = A[k+1..n,k]
 	for (row = k+1; row < n; row++)
-		X.data[row] = A.data[INDEX(row,k,n)];
+		X.data[row] = A.data[column_start+row];
 
 	// ||X|| = sqrt (S_k + X[k]^2)
 	double norm_x = sqrt (s_k + sqr (X.data[k]));
@@ -687,7 +650,7 @@ void matrix_triagonalize (Matrix A, Vector V) {
 
 		if (g_grid_proc.mycol == rank_has_column) {
 
-			// его считает только indxg2lc(k)-ый процесс
+			// его считает только процесс, у которого есть этот столбец
 			code = calculate_x (n, k, X, A);
 		}
 
@@ -709,11 +672,12 @@ void matrix_triagonalize (Matrix A, Vector V) {
 		for (col = k; col < n; col++) {
 			rank_has_column = indxg2pc (col);
 			if (g_grid_proc.mycol == rank_has_column) {
+				int column_start = INDEX(0,col,n);
 
 				// dot_product = x*a
 				dot_product = 0;
 				for (row = k; row < n; row++) {
-					dot_product += A.data[INDEX(row,col,n)]*X.data[row];
+					dot_product += A.data[column_start+row]*X.data[row];
 				}
 
 				// 2x*a
@@ -721,7 +685,7 @@ void matrix_triagonalize (Matrix A, Vector V) {
 
 				// a = a - (2x*a)x
 				for (row = k; row < n; row++) {
-					int index = INDEX(row,col,n);
+					int index = column_start+row;
 					A.data[index] -= dot_product*X.data[row];
 				}
 			}
@@ -764,7 +728,7 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 
 	X = vector_new (n); // вектор решения
 	if (i_am_the_master) {
-		A_k = vector_new (n); // дополнительный для столбцов матрицы
+		A_k = vector_new (n); // дополнительный для хранения столбцов матрицы
 	}
 
 	for (k = n-1; k >= 0; k--) {
@@ -787,6 +751,7 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 		}
 
 		if (i_am_the_master) {
+			// принимаем k-ый столбец матрицы
 			MPI_Status status;
 			MPI_Recv (A_k.data, k+1, MPI_DOUBLE, process_col, 0, MPI_COMM_WORLD, &status);
 
