@@ -15,10 +15,10 @@ tests.o: tests.c
 
 # Executables
 main: main.o matrix.o
-	$(CC) -o $@ main.o matrix.o
+	$(CC) -o $@ main.o matrix.o -lm
 
 tests: tests.o matrix.o
-	$(CC) -o $@ tests.o matrix.o
+	$(CC) -o $@ tests.o matrix.o -lm
 
 # Phony targets
 run: main

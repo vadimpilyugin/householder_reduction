@@ -28,17 +28,19 @@ typedef struct {
 } Vector;
 
 Vector vector_new (int size);
+Vector vector_new_copy (Vector V);
 void vector_free (Vector);
 Vector vector_new_and_fill (int size, double (*func)(int));
 void vector_print (Vector);
 double vector_abs_diff (Vector U, Vector V);
 
 
-void matrix_init (const int block_size); // call before all others
+void matrix_init (); // call before all others
 void matrix_exit (); // call after all others
 
 // matrix creation
 Matrix matrix_new(const int dim);
+Matrix matrix_new_and_fill (int size, double (*func)(int, int));
 Matrix matrix_new_copy (Matrix A);
 
 void matrix_free (Matrix A);
@@ -58,6 +60,9 @@ double matrix_abs_diff (Matrix A, Matrix B);
 
 // matrix transformations
 void matrix_transform (Matrix A, double (*func)(int, int, double));
-
+void matrix_triagonalize (Matrix A, Vector V);
+Vector gaussian_elimination (Matrix A, Vector V);
+Vector matrix_vector_mult (Matrix A, Vector X);
+double matrix_slau_difference (Matrix A, Vector X, Vector B);
 
 #endif

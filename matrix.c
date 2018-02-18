@@ -33,6 +33,18 @@
 #define DESC_N_ELEM 9
 #define USE_LOCAL_STORAGE 0
 #define STR_LEN 50
+#define BLOCK_SIZE 1
+
+#define SUCCESS 0
+#define ALREADY_TRIAGONAL 1
+#define ALREADY_ROTATED 2
+#define ZERO_COEFFICIENT 3
+
+#define EPS 1e-7
+
+// Macros
+#define INDEX(row, col, size) (indxg2lr((row))+(size)*indxg2lc((col)))
+#define sqr(x) ((x)*(x))
 
 // Global variables start with 'g_'
 static int g_block_size = 0;
@@ -153,14 +165,14 @@ static GridProcess new_grid (int n_proc_rows, int n_proc_cols, int myrank, int n
 	return grid_proc;
 }
 
-void matrix_init (const int block_size) {
+void matrix_init () {
 
 	int myrank, nproc;
 	MPI_Comm_rank (MPI_COMM_WORLD, &myrank);
 	MPI_Comm_size (MPI_COMM_WORLD, &nproc);
 	i_am_the_master = myrank == MASTER;
 
-	g_block_size = block_size;
+	g_block_size = BLOCK_SIZE;
 	int n_proc_rows = 1;
 	int n_proc_cols = nproc;
 	// guess_process_grid_dimensions (&n_proc_rows, &n_proc_cols);
@@ -337,6 +349,12 @@ void matrix_fill (Matrix A, double (*func)(int, int)) {
 	}
 }
 
+Matrix matrix_new_and_fill (int size, double (*func)(int, int)) {
+	Matrix A = matrix_new (size);
+	matrix_fill (A, func);
+	return A;
+}
+
 void matrix_transform (Matrix A, double (*func)(int, int, double)) {
 	int row, col;
 	for (col = 0; col < A.local_cols; col++) {
@@ -437,7 +455,7 @@ void matrix_print (Matrix A) {
 					int local_row = indxg2lr (global_row);
 					int local_col = indxg2lc (global_col);
 					double local_elem = A.data[local_col*A.local_rows+local_row];
-					snprintf (g_str, STR_LEN, "%7.3f", local_elem);
+					snprintf (g_str, STR_LEN, "%8.4lf ", local_elem);
 				}
 				MPI_Request request;
 				MPI_Isend (g_str,STR_LEN,MPI_CHAR,MASTER,0,MPI_COMM_WORLD, &request);
@@ -549,6 +567,13 @@ Vector vector_new (int size) {
 	return V;
 }
 
+Vector vector_new_copy (Vector V) {
+	Vector V_copy = vector_new (V.size);
+	memcpy (V_copy.data, V.data, V.size*sizeof(double));
+	V_copy.size = V.size;
+	return V_copy;
+}
+
 void vector_free (Vector V) {
 	if (V.data != NULL)
 		free (V.data);
@@ -599,4 +624,303 @@ double vector_abs_diff (Vector U, Vector V) {
 	}
 
 	return diff;
+}
+
+
+int calculate_x (int n, int k, Vector X, Matrix A) {
+	int row;
+	int col;
+
+	// считаем вектор x матрицы отражения
+	// x = (a - ||a||*e) / ||a - ||a||*e||
+
+	// S_k = sum for i = k+1..n (A[i,k]^2)
+	double s_k = 0;
+	for (row = k+1; row < n; row++)
+		s_k += sqr (A.data[INDEX(row,k,n)]);
+
+	// ||a|| = sqrt (S_k + A[k,k]^2)
+	double norm_a = sqrt (s_k + sqr(A.data[INDEX(k,k,n)]));
+	if (norm_a < EPS) {
+		// матрица приведена к треугольному виду
+		return ALREADY_TRIAGONAL;
+	}
+
+	// X[k] = A[k,k]-norm(A[k])
+	X.data[k] = A.data[INDEX(k,k,n)] - norm_a;
+
+	// X[k+1..n] = A[k+1..n,k]
+	for (row = k+1; row < n; row++)
+		X.data[row] = A.data[INDEX(row,k,n)];
+
+	// ||X|| = sqrt (S_k + X[k]^2)
+	double norm_x = sqrt (s_k + sqr (X.data[k]));
+	if (norm_x < EPS) {
+		// вектор уже повернут
+		return ALREADY_ROTATED;
+	}
+	// X = X / norm_x
+	for (row = k; row < n; row++) {
+		X.data[row] /= norm_x;
+	}
+	return SUCCESS;
+}
+
+void matrix_triagonalize (Matrix A, Vector V) {
+	if (i_am_the_master && A.n_rows != V.size) {
+		errno = EINVAL;
+		perror ("matrix_triagonalize: размеры не совпадают!");
+		exit (ERROR);
+	}
+	int n = A.n_rows;
+	int k;
+	int row;
+	int col;
+	int code;
+	Vector X = vector_new (n);
+
+	for (k = 0; k < n-1; k++) {
+		// считаем вектор x матрицы отражения
+		// x = (a - ||a||*e) / ||a - ||a||*e||
+
+		int rank_has_column = indxg2pc (k);
+
+		if (g_grid_proc.mycol == rank_has_column) {
+
+			// его считает только indxg2lc(k)-ый процесс
+			code = calculate_x (n, k, X, A);
+		}
+
+		// этот процесс рассылает код возврата остальным
+		MPI_Bcast (&code, 1, MPI_INT, rank_has_column, MPI_COMM_WORLD);
+		if (code == ALREADY_ROTATED)
+			continue;
+		else if (code == ALREADY_TRIAGONAL) {
+			vector_free (X);
+			return;
+		}
+
+		// далее этот процесс рассылает вектор X
+		MPI_Bcast (X.data, X.size, MPI_DOUBLE, rank_has_column, MPI_COMM_WORLD);
+
+		// считаем преобразование матрицы A
+		// a = (E - 2xx*)a = a - (2x*a)x
+		double dot_product;
+		for (col = k; col < n; col++) {
+			rank_has_column = indxg2pc (col);
+			if (g_grid_proc.mycol == rank_has_column) {
+
+				// dot_product = x*a
+				dot_product = 0;
+				for (row = k; row < n; row++) {
+					dot_product += A.data[INDEX(row,col,n)]*X.data[row];
+				}
+
+				// 2x*a
+				dot_product *= 2;
+
+				// a = a - (2x*a)x
+				for (row = k; row < n; row++) {
+					int index = INDEX(row,col,n);
+					A.data[index] -= dot_product*X.data[row];
+				}
+			}
+		}
+		if (i_am_the_master) {
+			// считаем преобразование вектора b
+			// a = (E - 2xx*)a = a - (2x*a)x
+			// dot_product = x*a
+			dot_product = 0;
+			for (row = k; row < n; row++) {
+				dot_product += V.data[row]*X.data[row];
+			}
+			// 2x*a
+			dot_product *= 2;
+			// a = a - (2x*a)x
+			for (row = k; row < n; row++) {
+				V.data[row] -= dot_product*X.data[row];
+			}	
+		}
+	}
+	vector_free (X);
+}
+
+Vector gaussian_elimination (Matrix A, Vector V) {
+	if (i_am_the_master && (
+			A.n_rows != V.size ||
+			A.n_rows != A.n_cols
+		)
+	) {
+		errno = EINVAL;
+		perror ("gaussian_elimination: размеры не совпадают!");
+		exit (ERROR);
+	}
+
+	int n = A.n_rows;
+	int k;
+	int row;
+	int code;
+	Vector X, A_k;
+
+	X = vector_new (n); // вектор решения
+	if (i_am_the_master) {
+		A_k = vector_new (n); // дополнительный для столбцов матрицы
+	}
+
+	for (k = n-1; k >= 0; k--) {
+		MPI_Barrier (MPI_COMM_WORLD);
+
+		// находим процесс, у которого есть k-ый столбец матрицы
+		int process_col = indxg2pc (k);
+		if (g_grid_proc.mycol == process_col) {
+
+			// посылаем на MASTER k-ый столбец матрицы с 0 по k-ый элементы включительно
+			MPI_Request request;
+			MPI_Isend (
+				A.data+INDEX(0,k,n), // первый элемент в k-ом столбце
+				k+1, 
+				MPI_DOUBLE, 
+				MASTER, 
+				0, MPI_COMM_WORLD, 
+				&request
+			);
+		}
+
+		if (i_am_the_master) {
+			MPI_Status status;
+			MPI_Recv (A_k.data, k+1, MPI_DOUBLE, process_col, 0, MPI_COMM_WORLD, &status);
+
+			// MASTER вычисляет X[k]
+			if (fabs (A_k.data[k]) < EPS) {
+				printf ("\n\n--- Матрица вырожденная\n\n");
+				vector_free (A_k);
+				code = ZERO_COEFFICIENT;
+			} else {
+				// находим очередное решение
+				X.data[k] = V.data[k] / A_k.data[k];
+
+				// и вычитаем из правой части k-ый столбец, умноженный на это решение
+				for (row = 0; row <= k; row++)
+					V.data[row] -= X.data[k] * A_k.data[row];
+
+				code = SUCCESS;
+			}
+		}
+
+		MPI_Bcast (&code, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+		if (code == ZERO_COEFFICIENT) {
+			vector_free (X);
+			X.data = NULL;
+			X.size = 0;
+			return X;
+		}
+		MPI_Barrier (MPI_COMM_WORLD);
+	}
+	MPI_Bcast (X.data, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+	return X;
+}
+
+Vector matrix_vector_mult (Matrix A, Vector X) {
+	if (i_am_the_master && (
+			A.n_cols != X.size ||
+			A.n_rows != A.n_cols
+		)
+	) {
+		errno = EINVAL;
+		perror ("gaussian_elimination: размеры не совпадают!");
+		exit (ERROR);
+	}
+
+	int n = A.n_rows;
+	int row;
+	int col;
+	int k;
+	int i;
+	Vector V;
+
+	if (i_am_the_master) {
+		V = vector_new (n); // результат
+	} else {
+		V.data = NULL;
+		V.size = 0;
+	}
+
+	// некоторые процессы могли не получить ни одного столбца
+	Vector Zero;
+	int is_zero_size = A.local_rows*A.local_cols == 0;
+	if (is_zero_size) {
+		Zero = vector_new (n);
+		// они отправляют нулевые векторы
+		memset (Zero.data, 0, n*sizeof(double));
+	}
+
+
+	for (k = 0; k < n; k++) {		
+		if (indxg2pc (k) == g_grid_proc.mycol) {
+			// каждый процесс умножает свою колонку в матрице на число X[k]
+			int row;
+			for (int row = 0; row < n; row++) {
+				A.data[INDEX(row,k,n)] *= X.data[k];
+			}
+		}
+	}
+
+	// каждый процесс суммирует все локальные столбцы и кладет результат в первый
+	for (row = 0; row < A.local_rows; row++) {
+		for (col = 1; col < A.local_cols; col++) {
+			A.data[row] += A.data[col*A.local_rows+row];
+		}
+	}
+
+	// все процессы посылают MASTER-у свой первый столбец, они все суммируются
+	if (is_zero_size) 
+		MPI_Reduce (
+			Zero.data,
+			V.data, n,
+			MPI_DOUBLE,
+			MPI_SUM,
+			MASTER,
+			MPI_COMM_WORLD
+		);
+	else
+		MPI_Reduce (
+			A.data,
+			V.data, n,
+			MPI_DOUBLE,
+			MPI_SUM,
+			MASTER,
+			MPI_COMM_WORLD
+		);
+	if (is_zero_size)
+		vector_free (Zero);
+	return V;
+}
+
+double vector_norm (Vector X) {
+	int row;
+	double sum = 0;
+	for (row = 0; row < X.size; row++)
+		sum += sqr (X.data[row]);
+	return sum;
+}
+
+double matrix_slau_difference (Matrix A, Vector X, Vector B) {
+	// невязка = ||Ax-b||
+
+	int n = A.n_rows;
+	int row;
+	double norm;
+
+	// Diff = Ax
+	Vector Diff = matrix_vector_mult (A, X);
+	if (i_am_the_master) {
+		// Diff = Ax-b
+		for (row = 0; row < n; row++)
+			Diff.data[row] -= B.data[row];
+		norm = vector_norm (Diff);
+		vector_free (Diff);
+	}
+	MPI_Bcast (&norm, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+	// возвращаем норму
+	return norm;
 }
