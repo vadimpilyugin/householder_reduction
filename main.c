@@ -19,7 +19,6 @@
 #define MASTER 0
 #define EPS 1e-7
 #define ERROR 2
-#define DAY 3600*24
 
 typedef unsigned int uint;
 int i_am_the_master;
@@ -68,7 +67,10 @@ int main (int argc, char * argv[]) {
 
   int rank;
   MPI_Comm_rank (MPI_COMM_WORLD, &rank);
-  randr_seed = time(NULL)+rank*DAY;
+  
+  randr_seed = time(NULL);
+  MPI_Bcast (&randr_seed, 1, MPI_UNSIGNED, MASTER, MPI_COMM_WORLD);
+  randr_seed += rank;
   int nproc;
   MPI_Comm_size (MPI_COMM_WORLD, &nproc);
   i_am_the_master = rank == MASTER;
