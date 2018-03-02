@@ -46,11 +46,11 @@ static char g_str [STR_LEN];
 
  // INDXG2L = NB*((INDXGLOB-1)/(NB*NPROCS))+MOD(INDXGLOB-1,NB)+1
 
-int indxg2l (int global_ind, int block_size, int n_proc_dim) {
+static inline int indxg2l (int global_ind, int block_size, int n_proc_dim) {
 	return block_size*(global_ind/(block_size*n_proc_dim))+global_ind%block_size;
 }
 // global index to local row
-int indxg2lr (int global_row) {
+static inline int indxg2lr (int global_row) {
 	if (indxg2l (global_row,g_block_size,g_grid_proc.n_proc_rows) != (g_block_size*(global_row/(g_block_size*g_grid_proc.n_proc_rows))+global_row%g_block_size)) {
 		perror ("Не равны");
 		exit (ERROR);
@@ -59,34 +59,34 @@ int indxg2lr (int global_row) {
 	return indxg2l (global_row,g_block_size,g_grid_proc.n_proc_rows);
 }
 // global index to local column
-int indxg2lc (int global_col) {
+static inline int indxg2lc (int global_col) {
 	return indxg2l (global_col, g_block_size, g_grid_proc.n_proc_cols);
 }
 
  // INDXG2P = MOD( ISRCPROC + (INDXGLOB - 1) / NB, NPROCS )
 
 // global index to local process number
-int indxg2p (int global_ind, int block_size, int n_proc_dim) {
+static inline int indxg2p (int global_ind, int block_size, int n_proc_dim) {
 	return (global_ind / block_size) % n_proc_dim;
 }
-int indxg2pr (int global_row) {
+static inline int indxg2pr (int global_row) {
 	return indxg2p (global_row, g_block_size, g_grid_proc.n_proc_rows);
 }
-int indxg2pc (int global_col) {
+static inline int indxg2pc (int global_col) {
 	return indxg2p (global_col, g_block_size, g_grid_proc.n_proc_cols);
 }
 
 // INDXL2G = NPROCS*NB*((INDXLOC-1)/NB) + MOD(INDXLOC-1,NB) + MOD(NPROCS+IPROC-ISRCPROC, NPROCS)*NB + 1
 
 // local index to global
-int indxl2g (int local_ind, int mydim, int block_size, int n_proc_dim) {
+static inline int indxl2g (int local_ind, int mydim, int block_size, int n_proc_dim) {
 	return n_proc_dim * block_size * (local_ind / block_size) + 
 		local_ind % block_size + mydim * block_size;
 }
-int indxl2gr (int local_row) {
+static inline int indxl2gr (int local_row) {
 	return indxl2g (local_row, g_grid_proc.myrow, g_block_size, g_grid_proc.n_proc_rows);
 }
-int indxl2gc (int local_col) {
+static inline int indxl2gc (int local_col) {
 	return indxl2g (local_col, g_grid_proc.mycol, g_block_size, g_grid_proc.n_proc_cols);
 }
 
@@ -674,7 +674,6 @@ void matrix_triagonalize (Matrix A, Vector V) {
 	}
 	vector_free (X);
 }
-
 Vector gaussian_elimination (Matrix A, Vector V) {
 	if (i_am_the_master && (
 			A.n_rows != V.size ||
@@ -687,70 +686,146 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 	}
 
 	int n = A.n_rows;
-	int k;
-	int row;
+	Vector X = vector_new (n);
+	double A_sum;
 	int code;
-	Vector X, A_k;
+	double a_k;
 
-	X = vector_new (n); // вектор решения
-	if (i_am_the_master) {
-		A_k = vector_new (n); // дополнительный для хранения столбцов матрицы
-		memset (A_k.data, 0, n*sizeof(double));
+	// раздаем вектор правой части на все процессы
+	if (!i_am_the_master) {
+		V = vector_new (n);
 	}
+	MPI_Bcast (V.data, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
 
-	for (k = n-1; k >= 0; k--) {
-		MPI_Barrier (MPI_COMM_WORLD);
+	for (int k = n-1; k >= 0; k--) {
+		// складываем коэффициенты на одном процессе
+		a_k = 0;
+		for (int col = k+1; col < n; col++) {
+			if (indxg2pc (col) == g_grid_proc.myrank) {
+				int column_start = indxg2lc (col);
+				int local_row = indxg2lr (k);
+				for (int local_col = column_start; local_col < A.local_cols; local_col++) {
+					a_k += A.data[local_col*A.local_rows+local_row] * X.data[indxl2gc(local_col)];
+				}
+				break;
 
-		// находим процесс, у которого есть k-ый столбец матрицы
-		int process_col = indxg2pc (k);
-		if (g_grid_proc.mycol == process_col) {
-
-			// посылаем на MASTER k-ый столбец матрицы с 0 по k-ый элементы включительно
-			MPI_Request request;
-			MPI_Isend (
-				A.data+INDEX(0,k,n), // первый элемент в k-ом столбце
-				k+1, 
-				MPI_DOUBLE, 
-				MASTER, 
-				0, MPI_COMM_WORLD, 
-				&request
-			);
-		}
-
-		if (i_am_the_master) {
-			// принимаем k-ый столбец матрицы
-			MPI_Status status;
-			MPI_Recv (A_k.data, k+1, MPI_DOUBLE, process_col, 0, MPI_COMM_WORLD, &status);
-
-			// MASTER вычисляет X[k]
-			if (fabs (A_k.data[k]) < EPS) {
-				printf ("\n\n--- Матрица вырожденная\n\n");
-				vector_free (A_k);
-				code = ZERO_COEFFICIENT;
-			} else {
-				// находим очередное решение
-				X.data[k] = V.data[k] / A_k.data[k];
-
-				// и вычитаем из правой части k-ый столбец, умноженный на это решение
-				for (row = 0; row <= k; row++)
-					V.data[row] -= X.data[k] * A_k.data[row];
-
-				code = SUCCESS;
+				// a_k += A.data[INDEX(k,col,n)] * X.data[col];
 			}
 		}
 
-		MPI_Bcast (&code, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+		// делаем Reduce на все полученные суммы
+		int proc_x_k = indxg2pc (k);
+		MPI_Reduce (
+			&a_k, &A_sum,
+			1, MPI_DOUBLE,
+			MPI_SUM,
+			proc_x_k,
+			MPI_COMM_WORLD
+		);
+
+		// X[k] = (b[k] - sum(A[k,i]*X[i], i=k+1..n)) / (A[k,k])
+		if (g_grid_proc.myrank == proc_x_k) {
+			// считаем X[k]
+			if (fabs (A.data[INDEX(k,k,n)]) < EPS) {
+				code = ZERO_COEFFICIENT;
+			} else {
+				// находим очередное решение
+				X.data[k] = (V.data[k] - A_sum) / A.data[INDEX(k,k,n)];
+				code = SUCCESS;
+			}
+		}
+		MPI_Bcast (&code, 1, MPI_INT, proc_x_k, MPI_COMM_WORLD);
 		if (code == ZERO_COEFFICIENT) {
+			if (i_am_the_master)
+				printf ("\n\n--- Матрица вырожденная\n\n");
 			vector_free (X);
 			X.data = NULL;
 			X.size = 0;
-			return X;
+			break;
 		}
-		MPI_Barrier (MPI_COMM_WORLD);
+		MPI_Bcast (X.data+k, 1, MPI_DOUBLE, proc_x_k, MPI_COMM_WORLD);
 	}
-	MPI_Bcast (X.data, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+	if (!i_am_the_master)
+		vector_free (V);
 	return X;
 }
+
+// Vector gaussian_elimination (Matrix A, Vector V) {
+// 	if (i_am_the_master && (
+// 			A.n_rows != V.size ||
+// 			A.n_rows != A.n_cols
+// 		)
+// 	) {
+// 		errno = EINVAL;
+// 		perror ("gaussian_elimination: размеры не совпадают!");
+// 		exit (ERROR);
+// 	}
+
+// 	int n = A.n_rows;
+// 	int k;
+// 	int row;
+// 	int code;
+// 	Vector X, A_k;
+
+// 	X = vector_new (n); // вектор решения
+// 	if (i_am_the_master) {
+// 		A_k = vector_new (n); // дополнительный для хранения столбцов матрицы
+// 		memset (A_k.data, 0, n*sizeof(double));
+// 	}
+
+// 	for (k = n-1; k >= 0; k--) {
+// 		MPI_Barrier (MPI_COMM_WORLD);
+
+// 		// находим процесс, у которого есть k-ый столбец матрицы
+// 		int process_col = indxg2pc (k);
+// 		if (g_grid_proc.mycol == process_col) {
+
+// 			// посылаем на MASTER k-ый столбец матрицы с 0 по k-ый элементы включительно
+// 			MPI_Request request;
+// 			MPI_Isend (
+// 				A.data+INDEX(0,k,n), // первый элемент в k-ом столбце
+// 				k+1, 
+// 				MPI_DOUBLE, 
+// 				MASTER, 
+// 				0, MPI_COMM_WORLD, 
+// 				&request
+// 			);
+// 		}
+
+// 		if (i_am_the_master) {
+// 			// принимаем k-ый столбец матрицы
+// 			MPI_Status status;
+// 			MPI_Recv (A_k.data, k+1, MPI_DOUBLE, process_col, 0, MPI_COMM_WORLD, &status);
+
+// 			// MASTER вычисляет X[k]
+// 			if (fabs (A_k.data[k]) < EPS) {
+// 				printf ("\n\n--- Матрица вырожденная\n\n");
+// 				vector_free (A_k);
+// 				code = ZERO_COEFFICIENT;
+// 			} else {
+// 				// находим очередное решение
+// 				X.data[k] = V.data[k] / A_k.data[k];
+
+// 				// и вычитаем из правой части k-ый столбец, умноженный на это решение
+// 				for (row = 0; row <= k; row++)
+// 					V.data[row] -= X.data[k] * A_k.data[row];
+
+// 				code = SUCCESS;
+// 			}
+// 		}
+
+// 		MPI_Bcast (&code, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+// 		if (code == ZERO_COEFFICIENT) {
+// 			vector_free (X);
+// 			X.data = NULL;
+// 			X.size = 0;
+// 			return X;
+// 		}
+// 		MPI_Barrier (MPI_COMM_WORLD);
+// 	}
+// 	MPI_Bcast (X.data, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+// 	return X;
+// }
 
 Vector matrix_vector_mult (Matrix A, Vector X) {
 	if (i_am_the_master && (
