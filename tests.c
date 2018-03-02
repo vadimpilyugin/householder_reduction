@@ -44,6 +44,20 @@ double vector_filler_natural (int row) {
 double matrix_filler_natural (int row, int col) {
 	return row*g_n+col+1;
 }
+double matrix_filler_inverse_sum (int row, int col) {
+	// row и col от 0
+	return 1/(row+col+1+0.0);
+}
+double vector_filler_inverse_sum (int row) {
+	double sum = 0;
+	for (int col = 0; col < g_n; col++)
+		if (col % 2 == 1)
+			sum += matrix_filler_inverse_sum (row, col);
+	return sum;
+}
+double vector_filler_inverse_sum_solution (int row) {
+	return row % 2;
+}
 double rand_d () {
 	return (rand () - RAND_MAX/2)/((double)RAND_MAX)*100;
 }
@@ -319,6 +333,8 @@ void test_slau_solving () {
 	Vector V_copy; // обратный ход испортит вектор V
 	if (i_am_the_master)
 		V_copy = vector_new_copy (V);
+	matrix_print (A);
+	vector_print (V);
 	Vector X = gaussian_elimination (A, V);
 	matrix_print (A);
 	if (i_am_the_master) {
@@ -501,6 +517,36 @@ void test_slau_diff () {
 }
 
 
+void test_slau_from_formula (int n) {
+	print_test ("test_slau_from_formula");
+	// if (i_am_the_master)
+	// 	printf ("\n\n");
+	// ======= test code ==========
+
+	g_n = n;
+	Matrix A = matrix_new_and_fill (n, matrix_filler_inverse_sum);
+	Vector V = vector_new_and_fill (n, vector_filler_inverse_sum);
+	Vector True_X = vector_new_and_fill (n, vector_filler_inverse_sum_solution);
+	// matrix_print (A);
+	// vector_print (V);
+	matrix_triagonalize (A, V);
+	Vector X = gaussian_elimination (A, V);
+	if (X.data != NULL) {
+		double diff = vector_abs_diff (X, True_X);
+		assert (diff < EPS, "Невязка не нулевая");
+		// vector_print (X);
+		vector_free (X);
+	}
+
+	matrix_free (A);
+	vector_free (V);
+	vector_free (True_X);
+
+	// ======= test code ==========
+	print_test (OK);
+}
+
+
 int main(int argc, char **argv) {
 
 	MPI_Init(&argc, &argv);
@@ -523,11 +569,12 @@ int main(int argc, char **argv) {
 	test_slau_solving ();
 	test_slau_antidiagonal ();
 	test_slau_degenerate_case ();
-	int i;
-	for (i = 0; i < 30; i++)
+	for (int i = 0; i < 30; i++)
 		test_slau_size (i);
 	test_matrix_vector_mult ();
 	test_slau_diff ();
+	for (int i = 0; i < 7; i++)
+		test_slau_from_formula (i);
 
 	// =================== Tests ======================
 	matrix_exit();
