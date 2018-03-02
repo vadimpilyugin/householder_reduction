@@ -27,7 +27,7 @@ build/tests: build/tests.o build/matrix.o
 # Phony targets
 run: build/main
 	# =================
-	mpiexec -n 7 -oversubscribe ./build/main 2001
+	mpiexec -n 7 -oversubscribe ./build/main 2001 >/dev/null
 
 test: build/tests
 	# =================

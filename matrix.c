@@ -558,29 +558,29 @@ double vector_abs_diff (Vector U, Vector V) {
 
 
 int calculate_x (int n, int k, Vector X, Matrix A) {
-	int row;
-	int column_start = INDEX(0,k,n);
+	int start_of_col = INDEX(0,k,n);
+
 	// считаем вектор x матрицы отражения
 	// x = (a - ||a||*e) / ||a - ||a||*e||
 
 	// S_k = sum for i = k+1..n (A[i,k]^2)
 	double s_k = 0;
-	for (row = k+1; row < n; row++)
-		s_k += sqr (A.data[column_start+row]);
+	for (int row = k+1; row < n; row++)
+		s_k += sqr (A.data[start_of_col+row]);
 
 	// ||a|| = sqrt (S_k + A[k,k]^2)
-	double norm_a = sqrt (s_k + sqr(A.data[column_start+k]));
+	double norm_a = sqrt (s_k + sqr(A.data[start_of_col+k]));
 	if (norm_a < EPS) {
 		// матрица приведена к треугольному виду
 		return ALREADY_TRIAGONAL;
 	}
 
 	// X[k] = A[k,k]-norm(A[k])
-	X.data[k] = A.data[column_start+k] - norm_a;
+	X.data[k] = A.data[start_of_col+k] - norm_a;
 
 	// X[k+1..n] = A[k+1..n,k]
-	for (row = k+1; row < n; row++)
-		X.data[row] = A.data[column_start+row];
+	for (int row = k+1; row < n; row++)
+		X.data[row] = A.data[start_of_col+row];
 
 	// ||X|| = sqrt (S_k + X[k]^2)
 	double norm_x = sqrt (s_k + sqr (X.data[k]));
@@ -589,7 +589,7 @@ int calculate_x (int n, int k, Vector X, Matrix A) {
 		return ALREADY_ROTATED;
 	}
 	// X = X / norm_x
-	for (row = k; row < n; row++) {
+	for (int row = k; row < n; row++) {
 		X.data[row] /= norm_x;
 	}
 	return SUCCESS;
@@ -602,16 +602,14 @@ void matrix_triagonalize (Matrix A, Vector V) {
 		exit (ERROR);
 	}
 	int n = A.n_rows;
-	int k;
-	int row;
-	int col;
 	int code;
+	int start_column = 0; // колонка, начиная с которой производится домножение матрицы на вектор x
 	Vector X = vector_new (n);
 
-	for (k = 0; k < n-1; k++) {
+	for (int k = 0; k < n-1; k++) {
+
 		// считаем вектор x матрицы отражения
 		// x = (a - ||a||*e) / ||a - ||a||*e||
-
 		int rank_has_column = indxg2pc (k);
 
 		if (g_grid_proc.mycol == rank_has_column) {
@@ -629,45 +627,48 @@ void matrix_triagonalize (Matrix A, Vector V) {
 			return;
 		}
 
-		// далее этот процесс рассылает вектор X
+		// далее этот процесс рассылает вектор x
 		MPI_Bcast (X.data, X.size, MPI_DOUBLE, rank_has_column, MPI_COMM_WORLD);
 
 		// считаем преобразование матрицы A
 		// a = (E - 2xx*)a = a - (2x*a)x
-		double dot_product;
-		for (col = k; col < n; col++) {
-			rank_has_column = indxg2pc (col);
-			if (g_grid_proc.mycol == rank_has_column) {
-				int column_start = INDEX(0,col,n);
+		for (int local_col = start_column; local_col < A.local_cols; local_col++) {
+			int start_of_col = local_col*A.local_rows;
 
-				// dot_product = x*a
-				dot_product = 0;
-				for (row = k; row < n; row++) {
-					dot_product += A.data[column_start+row]*X.data[row];
-				}
+			// dot_product = x*a
+			double dot_product = 0;
+			for (int row = k; row < n; row++) {
+				dot_product += A.data[start_of_col+row]*X.data[row];
+			}
 
-				// 2x*a
-				dot_product *= 2;
+			// 2x*a
+			dot_product *= 2;
 
-				// a = a - (2x*a)x
-				for (row = k; row < n; row++) {
-					int index = column_start+row;
-					A.data[index] -= dot_product*X.data[row];
-				}
+			// a = a - (2x*a)x
+			for (int row = k; row < n; row++) {
+				A.data[start_of_col+row] -= dot_product*X.data[row];
 			}
 		}
+
+		if (g_grid_proc.myrank == rank_has_column) {
+			// процесс, вычисливший x, увеличивает начальную колонку для себя
+			start_column++;
+		}
+
 		if (i_am_the_master) {
 			// считаем преобразование вектора b
 			// a = (E - 2xx*)a = a - (2x*a)x
 			// dot_product = x*a
-			dot_product = 0;
-			for (row = k; row < n; row++) {
+			double dot_product = 0;
+			for (int row = k; row < n; row++) {
 				dot_product += V.data[row]*X.data[row];
 			}
+
 			// 2x*a
 			dot_product *= 2;
+
 			// a = a - (2x*a)x
-			for (row = k; row < n; row++) {
+			for (int row = k; row < n; row++) {
 				V.data[row] -= dot_product*X.data[row];
 			}	
 		}
@@ -687,9 +688,11 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 
 	int n = A.n_rows;
 	Vector X = vector_new (n);
+	Vector X_local = vector_new (A.local_cols);
 	double A_sum;
 	int code;
 	double a_k;
+	int start_column = A.local_cols;
 
 	// раздаем вектор правой части на все процессы
 	if (!i_am_the_master) {
@@ -698,19 +701,12 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 	MPI_Bcast (V.data, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
 
 	for (int k = n-1; k >= 0; k--) {
+
 		// складываем коэффициенты на одном процессе
 		a_k = 0;
-		for (int col = k+1; col < n; col++) {
-			if (indxg2pc (col) == g_grid_proc.myrank) {
-				int column_start = indxg2lc (col);
-				int local_row = indxg2lr (k);
-				for (int local_col = column_start; local_col < A.local_cols; local_col++) {
-					a_k += A.data[local_col*A.local_rows+local_row] * X.data[indxl2gc(local_col)];
-				}
-				break;
-
-				// a_k += A.data[INDEX(k,col,n)] * X.data[col];
-			}
+		int local_row = indxg2lr (k);
+		for (int local_col = start_column; local_col < A.local_cols; local_col++) {
+			a_k += A.data[local_col*A.local_rows+local_row] * X_local.data[local_col];
 		}
 
 		// делаем Reduce на все полученные суммы
@@ -725,107 +721,42 @@ Vector gaussian_elimination (Matrix A, Vector V) {
 
 		// X[k] = (b[k] - sum(A[k,i]*X[i], i=k+1..n)) / (A[k,k])
 		if (g_grid_proc.myrank == proc_x_k) {
+
+			// уменьшаем start_column
+			start_column--;
+
 			// считаем X[k]
 			if (fabs (A.data[INDEX(k,k,n)]) < EPS) {
 				code = ZERO_COEFFICIENT;
 			} else {
 				// находим очередное решение
-				X.data[k] = (V.data[k] - A_sum) / A.data[INDEX(k,k,n)];
+				X_local.data[indxg2lc(k)] = (V.data[k] - A_sum) / A.data[INDEX(k,k,n)];
 				code = SUCCESS;
+				X.data[k] = X_local.data[indxg2lc(k)];
 			}
 		}
 		MPI_Bcast (&code, 1, MPI_INT, proc_x_k, MPI_COMM_WORLD);
 		if (code == ZERO_COEFFICIENT) {
-			if (i_am_the_master)
+			if (i_am_the_master) {
 				printf ("\n\n--- Матрица вырожденная\n\n");
-			vector_free (X);
+				vector_free (X);
+			}
 			X.data = NULL;
 			X.size = 0;
 			break;
 		}
-		MPI_Bcast (X.data+k, 1, MPI_DOUBLE, proc_x_k, MPI_COMM_WORLD);
+
+		// раздаем полученное решение
+		if (g_grid_proc.myrank == proc_x_k)
+			MPI_Bcast (X_local.data+indxg2lc(k), 1, MPI_DOUBLE, proc_x_k, MPI_COMM_WORLD);
+		else
+			MPI_Bcast (X.data+k, 1, MPI_DOUBLE, proc_x_k, MPI_COMM_WORLD);
 	}
 	if (!i_am_the_master)
 		vector_free (V);
+	vector_free (X_local);
 	return X;
 }
-
-// Vector gaussian_elimination (Matrix A, Vector V) {
-// 	if (i_am_the_master && (
-// 			A.n_rows != V.size ||
-// 			A.n_rows != A.n_cols
-// 		)
-// 	) {
-// 		errno = EINVAL;
-// 		perror ("gaussian_elimination: размеры не совпадают!");
-// 		exit (ERROR);
-// 	}
-
-// 	int n = A.n_rows;
-// 	int k;
-// 	int row;
-// 	int code;
-// 	Vector X, A_k;
-
-// 	X = vector_new (n); // вектор решения
-// 	if (i_am_the_master) {
-// 		A_k = vector_new (n); // дополнительный для хранения столбцов матрицы
-// 		memset (A_k.data, 0, n*sizeof(double));
-// 	}
-
-// 	for (k = n-1; k >= 0; k--) {
-// 		MPI_Barrier (MPI_COMM_WORLD);
-
-// 		// находим процесс, у которого есть k-ый столбец матрицы
-// 		int process_col = indxg2pc (k);
-// 		if (g_grid_proc.mycol == process_col) {
-
-// 			// посылаем на MASTER k-ый столбец матрицы с 0 по k-ый элементы включительно
-// 			MPI_Request request;
-// 			MPI_Isend (
-// 				A.data+INDEX(0,k,n), // первый элемент в k-ом столбце
-// 				k+1, 
-// 				MPI_DOUBLE, 
-// 				MASTER, 
-// 				0, MPI_COMM_WORLD, 
-// 				&request
-// 			);
-// 		}
-
-// 		if (i_am_the_master) {
-// 			// принимаем k-ый столбец матрицы
-// 			MPI_Status status;
-// 			MPI_Recv (A_k.data, k+1, MPI_DOUBLE, process_col, 0, MPI_COMM_WORLD, &status);
-
-// 			// MASTER вычисляет X[k]
-// 			if (fabs (A_k.data[k]) < EPS) {
-// 				printf ("\n\n--- Матрица вырожденная\n\n");
-// 				vector_free (A_k);
-// 				code = ZERO_COEFFICIENT;
-// 			} else {
-// 				// находим очередное решение
-// 				X.data[k] = V.data[k] / A_k.data[k];
-
-// 				// и вычитаем из правой части k-ый столбец, умноженный на это решение
-// 				for (row = 0; row <= k; row++)
-// 					V.data[row] -= X.data[k] * A_k.data[row];
-
-// 				code = SUCCESS;
-// 			}
-// 		}
-
-// 		MPI_Bcast (&code, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
-// 		if (code == ZERO_COEFFICIENT) {
-// 			vector_free (X);
-// 			X.data = NULL;
-// 			X.size = 0;
-// 			return X;
-// 		}
-// 		MPI_Barrier (MPI_COMM_WORLD);
-// 	}
-// 	MPI_Bcast (X.data, n, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
-// 	return X;
-// }
 
 Vector matrix_vector_mult (Matrix A, Vector X) {
 	if (i_am_the_master && (

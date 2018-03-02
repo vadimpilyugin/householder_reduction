@@ -24,6 +24,7 @@
 typedef unsigned int uint;
 int i_am_the_master;
 uint randr_seed;
+int g_n;
 // Измерение времени
 double sum_time = 0, tmp_time;
 
@@ -41,15 +42,15 @@ double stop()
 }
 
 double matrix_filler (int row, int col) {
-	// row и col от 0
-	if (row == col)
-		return 1*(row+1);
-	else
-		return 0;
+  // row и col от 0
+  return 1/(row+col+1+0.0);
 }
 double vector_filler (int row) {
-	// row от 0
-	return row+1;
+  double sum = 0;
+  for (int col = 0; col < g_n; col++)
+    if (col % 2 == 1)
+      sum += matrix_filler (row, col);
+  return sum;
 }
 double rand_d () {
 	return (rand_r (&randr_seed) - RAND_MAX/2)/((double)RAND_MAX)*100;
@@ -82,6 +83,7 @@ int main (int argc, char * argv[]) {
 		exit (ERROR);
   } else {
   	int size = atoi (argv[ARG_SIZE]);
+    g_n = size;
 		A = matrix_new_and_fill (size, matrix_filler_random);
 		if (i_am_the_master)
 			V = vector_new_and_fill (size, vector_filler_random);
@@ -108,7 +110,7 @@ int main (int argc, char * argv[]) {
 	go ();
 	Vector X = gaussian_elimination (A, V);
 	double gauss_time = stop ();
-	if (i_am_the_master)
+	if (i_am_the_master && X.data != NULL)
 		fprintf (stderr,"--- Обратный ход метода Гаусса: %lf сек\n", gauss_time);
 
 
@@ -121,7 +123,7 @@ int main (int argc, char * argv[]) {
 			fprintf (stderr,"--- Невязка = %f\r\n\r\n", diff);
 		if (diff > EPS) {
 			if (i_am_the_master)
-				fprintf (stderr, "Невязка не нулевая");
+				fprintf (stderr, "Невязка не нулевая\n");
 			exit (ERROR);
 		}
 
