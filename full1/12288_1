@@ -1,5 +1,0 @@
-<Feb 21 01:58:53.750308> BE_MPI (ERROR): The error message in the job record is as follows:
-<Feb 21 01:58:53.750375> BE_MPI (ERROR):   "killed with signal 11"
-<Feb 21 01:58:53.794048> BE_MPI (ERROR): print_job_errtext() - Job 759428 had 3 RAS events
-<Feb 21 01:58:53.794080> BE_MPI (ERROR): print_job_errtext() - last event: KERN_080C  DDR controller chipkill error count.  Controller 1, chipselect 4  Count=1852
-<Feb 21 01:58:53.794117> BE_MPI (ERROR): print_job_errtext() - Check the Navigator's job history for complete details
