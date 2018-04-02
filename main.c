@@ -42,7 +42,7 @@ double stop()
 
 double matrix_filler (int row, int col) {
   // row и col от 0
-  return 1/(row+col+1+0.0);
+  return row > col ? row : col;
 }
 double vector_filler (int row) {
   double sum = 0;
@@ -85,9 +85,9 @@ int main (int argc, char * argv[]) {
   } else {
   	int size = atoi (argv[ARG_SIZE]);
     g_n = size;
-		A = matrix_new_and_fill (size, matrix_filler_random);
+		A = matrix_new_and_fill (size, matrix_filler);
 		if (i_am_the_master)
-			V = vector_new_and_fill (size, vector_filler_random);
+			V = vector_new_and_fill (size, vector_filler);
   }
   MPI_Barrier (MPI_COMM_WORLD);
   if (i_am_the_master)
